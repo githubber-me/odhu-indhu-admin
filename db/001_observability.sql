@@ -179,7 +179,9 @@ BEGIN
         'questions', jsonb_array_length(NEW.questions),
         'evidenceSources', jsonb_array_length(NEW.evidence),
         'generatorModel', NEW.generator_model,
-        'promptVersion', NEW.prompt_version
+        'promptVersion', NEW.prompt_version,
+        'dailyNews', NEW.subject = 'Current Affairs'
+          AND NEW.topic LIKE 'News and current affairs for %'
       )
     );
   END IF;
