@@ -4,7 +4,7 @@ export function StatusPill({ status }: { status: string | null }) {
     ? "success"
     : ["failed", "error", "dead"].includes(value)
       ? "danger"
-      : ["processing", "pending", "queued", "leased"].includes(value)
+      : ["processing", "pending", "queued", "leased", "partial"].includes(value)
         ? "warning"
         : "neutral";
 

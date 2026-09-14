@@ -241,9 +241,55 @@ export type PipelineRow = {
   count: number;
 };
 
-export async function getOperationsData() {
+export type OperationEvent = {
+  id: string;
+  occurred_at: string;
+  level: "info" | "warn" | "error";
+  category: string;
+  event_type: string;
+  outcome: string;
+  learner: string;
+  user_email: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  message: string;
+  error_code: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type EventCounts = {
+  total: number;
+  errors: number;
+  warnings: number;
+  successes: number;
+  today: number;
+};
+
+export const operationViews = [
+  "all",
+  "healthy",
+  "attention",
+  "errors",
+  "study",
+  "topic",
+  "quiz",
+  "voice",
+  "report",
+  "user",
+  "api",
+  "client",
+  "auth",
+  "storage",
+] as const;
+
+export type OperationView = (typeof operationViews)[number];
+
+export async function getOperationsData(view: OperationView = "all", page = 1) {
   await requireAdmin();
-  const [voiceNotes, reports, pipeline] = await Promise.all([
+  const pageSize = 100;
+  const safePage = Math.max(1, Math.floor(page));
+  const offset = (safePage - 1) * pageSize;
+  const [voiceNotes, reports, pipeline, recordCountRows, eventRows, eventCountRows, eventTotalRows] = await Promise.all([
     sql`
       select v.id::text,
         coalesce(nullif(u.display_name, ''), nullif(u.handle, ''), 'Unknown learner') as learner,
@@ -274,12 +320,83 @@ export async function getOperationsData() {
       select 'Voice processing', coalesce(status, 'unknown'), count(*)::int from weekly_voice_notes group by status
       order by pipeline, status
     `,
+    sql`
+      select
+        (select count(*)::int from weekly_voice_notes) as voice_notes,
+        (select count(*)::int from weekly_reports) as reports
+    `,
+    sql`
+      select e.id::text, e.occurred_at, e.level, e.category, e.event_type,
+        e.outcome, e.entity_type, e.entity_id, e.message, e.error_code, e.metadata,
+        coalesce(nullif(u.display_name, ''), nullif(u.handle, ''), 'System') as learner,
+        u.email as user_email
+      from admin_event_log e
+      left join app_users u on u.id = e.user_id
+      where case ${view}
+        when 'healthy' then e.level = 'info' and e.outcome = 'success' and e.category in ('study', 'topic', 'voice')
+        when 'attention' then e.level in ('warn', 'error')
+        when 'errors' then e.level = 'error'
+        when 'study' then e.category = 'study'
+        when 'topic' then e.category = 'topic'
+        when 'quiz' then e.category = 'quiz'
+        when 'voice' then e.category = 'voice'
+        when 'report' then e.category = 'report'
+        when 'user' then e.category = 'user'
+        when 'api' then e.category = 'api'
+        when 'client' then e.category = 'client'
+        when 'auth' then e.category = 'auth'
+        when 'storage' then e.category = 'storage'
+        else true
+      end
+      order by e.occurred_at desc, e.id desc
+      limit ${pageSize} offset ${offset}
+    `,
+    sql`
+      select
+        count(*)::int as total,
+        count(*) filter (where level = 'error')::int as errors,
+        count(*) filter (where level = 'warn')::int as warnings,
+        count(*) filter (where outcome = 'success' and level = 'info')::int as successes,
+        count(*) filter (where occurred_at >= current_date)::int as today
+      from admin_event_log
+    `,
+    sql`
+      select count(*)::int as total
+      from admin_event_log e
+      where case ${view}
+        when 'healthy' then e.level = 'info' and e.outcome = 'success' and e.category in ('study', 'topic', 'voice')
+        when 'attention' then e.level in ('warn', 'error')
+        when 'errors' then e.level = 'error'
+        when 'study' then e.category = 'study'
+        when 'topic' then e.category = 'topic'
+        when 'quiz' then e.category = 'quiz'
+        when 'voice' then e.category = 'voice'
+        when 'report' then e.category = 'report'
+        when 'user' then e.category = 'user'
+        when 'api' then e.category = 'api'
+        when 'client' then e.category = 'client'
+        when 'auth' then e.category = 'auth'
+        when 'storage' then e.category = 'storage'
+        else true
+      end
+    `,
   ]);
 
   return {
     voiceNotes: voiceNotes as unknown as VoiceNoteRow[],
     reports: reports as unknown as ReportRow[],
     pipeline: pipeline as unknown as PipelineRow[],
+    recordCounts: {
+      voiceNotes: Number(recordCountRows[0]?.voice_notes ?? 0),
+      reports: Number(recordCountRows[0]?.reports ?? 0),
+    },
+    events: eventRows as unknown as OperationEvent[],
+    eventCounts: (eventCountRows as unknown as EventCounts[])[0],
+    eventPagination: {
+      page: safePage,
+      pageSize,
+      total: Number(eventTotalRows[0]?.total ?? 0),
+    },
     storage: {
       tokenReady: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
       storeReady: Boolean(process.env.BLOB_STORE_ID),
